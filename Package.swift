@@ -1,6 +1,10 @@
 // swift-tools-version: 6.4
 import PackageDescription
 
+/// KwiftDB's release version. CI releases it when it names the current
+/// release week (RELEASES.md).
+let version: String = "26.10.4"
+
 /// Settings SwiftNIO QUIC's public API needs from code that uses it.
 /// Swift 6.4 language settings every target uses: approachable concurrency
 /// (nonisolated async functions run on the caller's actor; conformances may be
