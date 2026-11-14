@@ -14,9 +14,12 @@ import Foundation
 /// and writes never wait for it. Without a running `maintain()`, a write that
 /// freezes a memory table does that upkeep itself.
 ///
-/// Separate `Store` instances must not open the same directory at once.
+/// Separate `Store` instances must not open the same directory at once. An
+/// operating-system lock rejects a second opener, including one in another
+/// process.
 public actor Store {
   let directory: URL
+  private let directoryLock: StoreDirectoryLock
   var manifest: Manifest
   private var log: LogWriter
   private var memory: MemoryTable
@@ -40,8 +43,9 @@ public actor Store {
   ///
   /// - Parameter directory: The directory that owns `MANIFEST`, numbered logs,
   ///   and numbered sorted-table files.
-  /// - Throws: `KwiftDBError.io` for file-system failures or
-  ///   `KwiftDBError.corruptStorage` when a referenced file cannot be decoded.
+  /// - Throws: `KwiftDBError.io` for file-system failures or when another
+  ///   process already has this directory open, or `KwiftDBError.corruptStorage`
+  ///   when a referenced file cannot be decoded.
   public init(directory: URL) throws {
     let manager = FileManager.default
     var isDirectory: ObjCBool = false
@@ -53,6 +57,7 @@ public actor Store {
       do { try manager.createDirectory(at: directory, withIntermediateDirectories: true) }
       catch { throw KwiftDBError.io(error.localizedDescription) }
     }
+    let directoryLock = try StoreDirectoryLock(directory: directory)
 
     let manifestURL = directory.appendingPathComponent(ManifestFile.name, isDirectory: false)
     if !manager.fileExists(atPath: manifestURL.path) {
@@ -70,6 +75,7 @@ public actor Store {
         throw error
       }
       self.directory = directory
+      self.directoryLock = directoryLock
       manifest = freshManifest
       log = freshLog
       memory = MemoryTable()
@@ -129,6 +135,7 @@ public actor Store {
     try Self.reconcileFiles(in: directory, manifest: &recoveredManifest)
 
     self.directory = directory
+    self.directoryLock = directoryLock
     manifest = recoveredManifest
     log = recoveredWriter
     memory = recoveredMemory
@@ -286,6 +293,8 @@ public actor Store {
       catch { if firstError == nil { firstError = error } }
     }
     do { try log.close() }
+    catch { if firstError == nil { firstError = error } }
+    do { try directoryLock.close() }
     catch { if firstError == nil { firstError = error } }
     if let firstError { throw firstError }
   }

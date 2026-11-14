@@ -94,7 +94,11 @@ public actor Replica {
   ///
   /// Two stores open on one directory corrupt it, so an app that may open an
   /// account's replica again before the previous one is gone opens it here
-  /// and closes it when done.
+  /// and closes it when done. A replica already open in another process makes
+  /// this call throw instead of waiting.
+  ///
+  /// - Throws: When another process has the directory open or its storage
+  ///   cannot be opened.
   public static func open(
     directory: URL, functions: Functions, retention: ReplicaRetention = .exact
   ) async throws -> Replica {
