@@ -7,4 +7,6 @@ struct RefreshedView: Sendable {
   var pendingWrites: [KeyRange]
   /// The subscribed queries that ran again rather than keeping their result.
   var reran: [String]
+  /// Why each query that failed over the local view failed.
+  var failures: [Number: String] = [:]
 }

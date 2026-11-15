@@ -12,24 +12,30 @@ struct ReplicaRetentionTests {
     let link = try await InProcessLink(root: root, retention: .keepReleased)
 
     try await link.server.set("first")
-    var query = try await link.subscribeAndSync()
+    let query = try await link.subscribeAndSync()
     #expect(await link.replica.value(of: query) == .text("first"))
     try await link.unsubscribeAndSync(query)
 
     // The server changes the row while the replica does not hold it.
     try await link.server.set("second")
 
-    // Offline, a cold replica on the same directory still reads the cache.
-    let reopened = try Replica(directory: root.appending(path: "replica"), functions: InProcessLink.functions, retention: .keepReleased)
-    let cold = try await reopened.subscribe(name: "note", arguments: .null)
-    #expect(await reopened.value(of: cold) == .text("first"))
-    #expect(await reopened.isReady(cold) == false)
-    try await reopened.close()
+    // Before the server answers, a new subscription reads the released rows.
+    let cached = try await link.replica.subscribe(name: "note", arguments: .null)
+    #expect(await link.replica.value(of: cached) == .text("first"))
+    #expect(await link.replica.isReady(cached) == false)
 
     // Held again, the range holds exactly the server's rows.
-    query = try await link.subscribeAndSync()
-    #expect(await link.replica.isReady(query))
-    #expect(await link.replica.value(of: query) == .text("second"))
+    try await link.sync()
+    #expect(await link.replica.isReady(cached))
+    #expect(await link.replica.value(of: cached) == .text("second"))
+
+    // Closed and opened again offline, the replica still reads them.
+    try await link.replica.close()
+    let reopened = try Replica(directory: root.appending(path: "replica"), functions: InProcessLink.functions, retention: .keepReleased)
+    let cold = try await reopened.subscribe(name: "note", arguments: .null)
+    #expect(await reopened.value(of: cold) == .text("second"))
+    #expect(await reopened.isReady(cold) == false)
+    try await reopened.close()
   }
 
   @Test("exact removes released rows", .timeLimit(.minutes(1)))
@@ -42,6 +48,31 @@ struct ReplicaRetentionTests {
     try await link.unsubscribeAndSync(query)
     let probe = try await link.replica.subscribe(name: "note", arguments: .null)
     #expect(await link.replica.value(of: probe) == .null)
+  }
+
+  @Test("keepLingering takes a let-go query back ready, and ends the oldest past the limit", .timeLimit(.minutes(1)))
+  func keepLingering() async throws {
+    let root = try Self.directory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let link = try await InProcessLink(root: root, retention: .exact)
+    try await link.replica.keepLingering(1)
+    try await link.server.set("first")
+
+    let query = try await link.subscribeAndSync()
+    try await link.unsubscribeAndSync(query)
+    let again = try await link.replica.subscribe(name: "note", arguments: .null)
+    #expect(again == query)
+    #expect(await link.replica.isReady(again))
+    #expect(await link.replica.value(of: again) == .text("first"))
+    #expect(await link.replica.takeOutgoing().isEmpty)
+
+    // A second let-go query pushes the first out for real.
+    let other = try await link.replica.subscribe(name: "note", arguments: .text("other"))
+    try await link.replica.unsubscribe(again)
+    try await link.replica.unsubscribe(other)
+    let sent = await link.replica.takeOutgoing()
+    #expect(sent.contains { if case .unsubscribe(let ended) = $0 { ended == query } else { false } })
+    #expect(!sent.contains { if case .unsubscribe(let ended) = $0 { ended == other } else { false } })
   }
 
   private static func directory() throws -> URL {
@@ -90,7 +121,8 @@ private struct InProcessLink {
     try await sync()
   }
 
-  private func sync() async throws {
+  /// Delivers the replica's queued messages and the server's replies.
+  func sync() async throws {
     for message in await replica.takeOutgoing() {
       for reply in try await server.receive(message, from: connection) { _ = try await replica.receive(reply) }
     }

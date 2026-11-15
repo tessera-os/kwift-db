@@ -63,6 +63,9 @@ public actor Replica {
   /// The storage ranges each subscribed query read in the last refresh: a
   /// query is run again only when what changed overlaps them.
   private var queryRanges: [Number: [KeyRange]] = [:]
+  /// Why each query failed over the local view in the last refresh, so a
+  /// failure is logged when it starts or changes, not on every refresh.
+  private var queryFailures: [Number: String] = [:]
   /// The keys pending mutations wrote in the last refresh, as point ranges.
   private var pendingKeys: [KeyRange] = []
   private var tableCatalogIsolation = false
@@ -77,6 +80,14 @@ public actor Replica {
   private var turnWaiters: [CheckedContinuation<Void, Never>] = []
   /// Where the running operation's time went, for the slow-operation log.
   private var breakdown: [String] = []
+  /// How many unsubscribed queries stay subscribed, newest kept.
+  private var lingerLimit = 0
+  /// The query names that linger; nil for every one.
+  private var lingerNames: Set<String>?
+  /// Queries no reader holds any more but still subscribed, least recently
+  /// let go first. Subscribing to one again takes it back with its value and
+  /// readiness as they are, so a page opened again shows at once.
+  private var lingering: [Number] = []
 
   /// Opens or creates a replica directory using the shared function registry.
   ///
@@ -128,6 +139,13 @@ public actor Replica {
       Self.logIfSlow("subscribe \(name)", waited: started - arrived, worked: ContinuousClock.now - started)
     }
     try await ensureLoaded()
+    if let kept = lingering.firstIndex(where: {
+      subscriptions[$0]?.name == name && subscriptions[$0]?.arguments == arguments
+    }) {
+      // Still subscribed and kept live by the server: its value is current.
+      // `value(of:)` and `isReady(_:)` give it at once.
+      return lingering.remove(at: kept)
+    }
     let query = try Number(nextQuery.description)
     nextQuery = nextQuery.incremented()
     subscriptions[query] = ReplicaSubscription(name: name, arguments: arguments)
@@ -137,11 +155,44 @@ public actor Replica {
     return query
   }
 
-  /// Removes a query subscription and informs an open server session.
+  /// Keeps up to `limit` queries subscribed after ``unsubscribe(_:)``, the
+  /// most recently let go first, so subscribing to one again finds its value
+  /// and readiness at once. Zero, the default, ends every subscription when
+  /// it is let go, as the spec has it.
+  ///
+  /// - Parameter names: The queries that linger; nil for all. Queries
+  ///   subscribed once each, such as a search per keystroke, belong out of
+  ///   it, or they push out the ones worth keeping.
+  public func keepLingering(_ limit: Int, names: Set<String>? = nil) async throws {
+    await beginTurn()
+    defer { endTurn() }
+    try await ensureLoaded()
+    lingerLimit = max(limit, 0)
+    lingerNames = names
+    dropLingering()
+  }
+
+  /// Removes a query subscription and informs an open server session; with
+  /// ``keepLingering(_:)`` the query stays subscribed until newer ones push
+  /// it out.
   public func unsubscribe(_ query: Number) async throws {
     await beginTurn()
     defer { endTurn() }
     try await ensureLoaded()
+    guard let subscription = subscriptions[query], !lingering.contains(query) else { return }
+    guard lingerNames?.contains(subscription.name) ?? true else { return end(query) }
+    lingering.append(query)
+    dropLingering()
+  }
+
+  /// Ends the oldest lingering subscriptions past the limit.
+  private func dropLingering() {
+    while lingering.count > lingerLimit {
+      end(lingering.removeFirst())
+    }
+  }
+
+  private func end(_ query: Number) {
     subscriptions.removeValue(forKey: query)
     lastResults.removeValue(forKey: query)
     queryRanges.removeValue(forKey: query)
@@ -613,6 +664,7 @@ public actor Replica {
         var values: [Number: Value] = [:]
         var ranges: [Number: [KeyRange]] = [:]
         var reran: [String] = []
+        var failures: [Number: String] = [:]
         for (query, subscription) in subscriptionSnapshot {
           if let dirty, let known = knownRanges[query], let previous = old[query], !KeyRanges.overlap(known, dirty) {
             values[query] = previous
@@ -623,16 +675,24 @@ public actor Replica {
           reran.append(subscription.name)
           let start = await run.readCount()
           do { values[query] = try await function.run(run, caller, subscription.arguments) }
-          catch {}
+          catch { failures[query] = "\(subscription.name): \(error)" }
           ranges[query] = KeyRanges.normalized(await run.ranges(since: start))
         }
-        return RefreshedView(values: values, ranges: ranges, pendingWrites: pendingWrites, reran: reran)
+        return RefreshedView(
+          values: values, ranges: ranges, pendingWrites: pendingWrites, reran: reran, failures: failures)
       }
       guard case .success(let view) = result.outcome else { return }
       breakdown.append("queries=\(subscriptionSnapshot.count) reran=\(view.reran.joined(separator: ","))")
       lastResults = view.values
       queryRanges = view.ranges
       pendingKeys = view.pendingWrites
+      // A query that fails here keeps no local value, so its subscriber
+      // waits on the server alone: say why once, or the wait has no
+      // explanation.
+      for (query, failure) in view.failures where queryFailures[query] != failure {
+        Self.logger.warning("local query failed", metadata: ["failure": "\(failure)"])
+      }
+      queryFailures = view.failures
       for (query, value) in view.values where old[query] != value {
         events.append(.changed(query: query, value: value))
       }
