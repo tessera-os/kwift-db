@@ -61,7 +61,7 @@ internal enum LogReader {
   static func read(at url: URL) throws -> LogReadResult {
     let bytes: [UInt8]
     do { bytes = Array(try Data(contentsOf: url)) }
-    catch { throw KwiftDBError.io(error.localizedDescription) }
+    catch { throw KwiftDBError.io("could not read \(url.path): \(error)") }
 
     var offset = 0
     var validByteCount = 0

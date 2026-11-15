@@ -29,7 +29,7 @@ internal final class StorageFile {
     do {
       return StorageFile(url: url, handle: try FileHandle(forUpdating: url), writable: true)
     } catch {
-      throw KwiftDBError.io(error.localizedDescription)
+      throw KwiftDBError.io("\(url.path): \(error)")
     }
   }
 
@@ -38,7 +38,7 @@ internal final class StorageFile {
     do {
       return StorageFile(url: url, handle: try FileHandle(forUpdating: url), writable: true)
     } catch {
-      throw KwiftDBError.io(error.localizedDescription)
+      throw KwiftDBError.io("\(url.path): \(error)")
     }
   }
 
@@ -47,7 +47,7 @@ internal final class StorageFile {
     do {
       return StorageFile(url: url, handle: try FileHandle(forReadingFrom: url), writable: false)
     } catch {
-      throw KwiftDBError.io(error.localizedDescription)
+      throw KwiftDBError.io("\(url.path): \(error)")
     }
   }
 
@@ -59,7 +59,7 @@ internal final class StorageFile {
       try handle.write(contentsOf: data)
       return offset
     } catch {
-      throw KwiftDBError.io(error.localizedDescription)
+      throw KwiftDBError.io("\(url.path): \(error)")
     }
   }
 
@@ -75,7 +75,7 @@ internal final class StorageFile {
     } catch let error as KwiftDBError {
       throw error
     } catch {
-      throw KwiftDBError.io(error.localizedDescription)
+      throw KwiftDBError.io("\(url.path): \(error)")
     }
   }
 
@@ -83,7 +83,7 @@ internal final class StorageFile {
   func readWhole() throws -> Data {
     guard !closed else { throw KwiftDBError.io("file is closed") }
     do { return try Data(contentsOf: url) }
-    catch { throw KwiftDBError.io(error.localizedDescription) }
+    catch { throw KwiftDBError.io("\(url.path): \(error)") }
   }
 
   /// The current physical size of this file.
@@ -97,7 +97,7 @@ internal final class StorageFile {
     } catch let error as KwiftDBError {
       throw error
     } catch {
-      throw KwiftDBError.io(error.localizedDescription)
+      throw KwiftDBError.io("\(url.path): \(error)")
     }
   }
 
@@ -105,7 +105,7 @@ internal final class StorageFile {
   func synchronize() throws {
     guard writable, !closed else { throw KwiftDBError.io("file is not open for synchronization") }
     do { try handle.synchronize() }
-    catch { throw KwiftDBError.io(error.localizedDescription) }
+    catch { throw KwiftDBError.io("\(url.path): \(error)") }
   }
 
   /// Removes bytes after `offset`, used to discard a torn unacknowledged log tail.
@@ -115,7 +115,7 @@ internal final class StorageFile {
       try handle.truncate(atOffset: offset)
       try handle.synchronize()
     } catch {
-      throw KwiftDBError.io(error.localizedDescription)
+      throw KwiftDBError.io("\(url.path): \(error)")
     }
   }
 
@@ -124,7 +124,7 @@ internal final class StorageFile {
     guard !closed else { return }
     closed = true
     do { try handle.close() }
-    catch { throw KwiftDBError.io(error.localizedDescription) }
+    catch { throw KwiftDBError.io("\(url.path): \(error)") }
   }
 
   deinit {

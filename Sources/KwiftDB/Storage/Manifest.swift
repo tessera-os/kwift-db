@@ -127,7 +127,7 @@ internal enum ManifestFile {
     let url = directory.appendingPathComponent(name, isDirectory: false)
     do { return try Manifest.parse(String(contentsOf: url, encoding: .utf8)) }
     catch let error as KwiftDBError { throw error }
-    catch { throw KwiftDBError.io(error.localizedDescription) }
+    catch { throw KwiftDBError.io("could not read \(url.path): \(error)") }
   }
 
   /// Writes and syncs a complete replacement manifest before installing it.
@@ -152,7 +152,7 @@ internal enum ManifestFile {
     } catch let error as KwiftDBError {
       throw error
     } catch {
-      throw KwiftDBError.io(error.localizedDescription)
+      throw KwiftDBError.io("could not store the manifest in \(directory.path): \(error)")
     }
   }
 }

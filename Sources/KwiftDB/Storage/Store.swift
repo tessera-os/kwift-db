@@ -55,7 +55,7 @@ public actor Store {
       }
     } else {
       do { try manager.createDirectory(at: directory, withIntermediateDirectories: true) }
-      catch { throw KwiftDBError.io(error.localizedDescription) }
+      catch { throw KwiftDBError.io("could not create \(directory.path): \(error)") }
     }
     let directoryLock = try StoreDirectoryLock(directory: directory)
 
@@ -65,7 +65,7 @@ public actor Store {
       let logURL = Self.logURL(directory, number: freshManifest.log)
       if manager.fileExists(atPath: logURL.path) {
         do { try manager.removeItem(at: logURL) }
-        catch { throw KwiftDBError.io(error.localizedDescription) }
+        catch { throw KwiftDBError.io("could not remove \(logURL.path): \(error)") }
       }
       let freshLog = try LogWriter.create(at: logURL)
       do { try ManifestFile.store(freshManifest, in: directory) }
@@ -313,7 +313,7 @@ public actor Store {
       if FileManager.default.fileExists(atPath: url.path) {
         try FileManager.default.removeItem(at: url)
       }
-    } catch { throw KwiftDBError.io(error.localizedDescription) }
+    } catch { throw KwiftDBError.io("could not remove \(url.path): \(error)") }
   }
 
   private static func entryPrecedes(_ lhs: Entry, _ rhs: Entry) -> Bool {
@@ -351,7 +351,7 @@ public actor Store {
   static func liveLogs(in directory: URL, from first: DatabaseUInt) throws -> [DatabaseUInt] {
     let children: [URL]
     do { children = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) }
-    catch { throw KwiftDBError.io(error.localizedDescription) }
+    catch { throw KwiftDBError.io("could not list \(directory.path): \(error)") }
     return children.compactMap { child -> DatabaseUInt? in
       let parts = child.lastPathComponent.split(separator: ".", omittingEmptySubsequences: false)
       guard parts.count == 2, parts[1] == "log", let number = try? DatabaseUInt(String(parts[0])),
@@ -365,7 +365,7 @@ public actor Store {
     let manager = FileManager.default
     let children: [URL]
     do { children = try manager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) }
-    catch { throw KwiftDBError.io(error.localizedDescription) }
+    catch { throw KwiftDBError.io("could not list \(directory.path): \(error)") }
 
     var highestAllocated: DatabaseUInt?
     for child in children {
@@ -386,7 +386,7 @@ public actor Store {
       if name.hasSuffix(".log") || name.hasSuffix(".table") {
         if !retained.contains(name) {
           do { try manager.removeItem(at: child) }
-          catch { throw KwiftDBError.io(error.localizedDescription) }
+          catch { throw KwiftDBError.io("could not remove \(child.path): \(error)") }
         }
       } else if name == ManifestFile.next {
         try? manager.removeItem(at: child)
